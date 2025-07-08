@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=900, initial-scale=1.0">
+  <title>Economic Sectors Ternary Diagram</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      margin: 0;
+      background: #f5f5f5;
+    }
+    .main-layout {
+      display: flex;
+      min-height: 100vh;
+    }
+    .sidebar {
+      width: 260px;
+      background: #fff;
+      padding: 32px 24px 24px 24px;
+      box-shadow: 2px 0 10px rgba(0,0,0,0.06);
+      display: flex;
+      flex-direction: column;
+      gap: 32px;
+    }
+    .sidebar h2 {
+      margin-top: 0;
+      font-size: 1.3em;
+      color: #333;
+    }
+    .sidebar label {
+      font-weight: bold;
+      margin-bottom: 6px;
+      color: #444;
+    }
+    .sidebar input[type="text"], .sidebar input[type="number"] {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      margin-bottom: 12px;
+      font-size: 1em;
+    }
+    .sidebar .desc {
+      font-size: 0.95em;
+      color: #666;
+      margin-bottom: 12px;
+    }
+    .content {
+      flex: 1;
+      padding: 32px 0 0 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .diagram-container {
+      display: flex;
+      gap: 32px;
+      align-items: flex-start;
+    }
+    #triangle-diagram {
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.07);
+      border: 1px solid #ddd;
+    }
+    #info-box {
+      width: 270px;
+      padding: 18px 18px 12px 18px;
+      background: #fff;
+      border-left: 4px solid #e74c3c;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.07);
+      margin-top: 0;
+      display: none;
+    }
+    #info-box h3 {
+      margin-top: 0;
+      margin-bottom: 10px;
+      color: #333;
+    }
+    #info-box p {
+      margin: 6px 0;
+      color: #444;
+    }
+    #info-raw-details {
+      font-size: 12px;
+      max-height: 180px;
+      overflow-y: auto;
+      margin-top: 10px;
+      border-top: 1px solid #eee;
+      padding-top: 8px;
+    }
+    .status-message {
+      margin: 10px 0 0 0;
+      padding: 10px;
+      background: #f0f0f0;
+      border-radius: 4px;
+      font-weight: bold;
+      color: #444;
+    }
+    @media (max-width: 900px) {
+      .main-layout { flex-direction: column; }
+      .sidebar { width: 100%; box-shadow: none; border-bottom: 1px solid #eee; }
+      .content { padding: 0; }
+      .diagram-container { flex-direction: column; align-items: center; }
+      #info-box { margin-left: 0; margin-top: 24px; }
+    }
+  </style>
+</head>
+<body>
+<div class="main-layout">
+  <div class="sidebar">
+    <div>
+      <h2>Ternary Diagram Controls</h2>
+      <label for="fixed-years">Fixed Years (comma separated)</label>
+      <input type="text" id="fixed-years" value="1880,1920,1950,1980,1997,2000,2008">
+      <label for="threshold">Change Threshold (%)</label>
+      <input type="number" id="threshold" value="25" min="0" max="100">
+      <div class="desc">
+        <strong>How it works:</strong><br>
+        Only years with a sector change above the threshold (or in the fixed list) are shown.
+      </div>
+      <div id="status-message" class="status-message" style="display:none;"></div>
+    </div>
+    <div style="font-size:0.95em;color:#888;">
+      <strong>Data:</strong> <code>timeseries.txt</code><br>
+      <strong>Source:</strong> GitHub Pages<br>
+      <strong>Diagram:</strong> D3.js, no build tools
+    </div>
+  </div>
+  <div class="content">
+    <h1 style="margin-top:0;margin-bottom:24px;color:#333;">Economic Sectors Ternary Diagram</h1>
+    <div class="diagram-container">
+      <svg id="triangle-diagram" width="600" height="600"></svg>
+      <div id="info-box">
+        <h3>Data for Year <span id="info-year"></span></h3>
+        <p><strong>Primary Sector:</strong> <span id="info-primary-perc"></span>% (<span id="info-primary-raw"></span>)</p>
+        <p><strong>Secondary Sector:</strong> <span id="info-secondary-perc"></span>% (<span id="info-secondary-raw"></span>)</p>
+        <p><strong>Tertiary Sector:</strong> <span id="info-tertiary-perc"></span>% (<span id="info-tertiary-raw"></span>)</p>
+        <div id="info-raw-details">
+          <!-- Raw data details will be populated here -->
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:32px;max-width:700px;color:#555;font-size:1em;">
+      <strong>How to read:</strong> Each corner is 100% in one sector, 0% in the others. Axes show sector shares. Click a point for details.
+    </div>
+  </div>
+</div>
+<script>
+// --- Sector groupings ---
+const PRIMARY = [
+  'Food crops', 'Animal husbandry', 'Farm cash crops', 'Estate crops', 'Fisheries', 'Forestry', 'Mining', 'Oil,Gas'
+];
+const SECONDARY = [
+  'Manufacturing', 'Utilities', 'Construction'
+];
+const TERTIARY = [
+  'Trade', 'Transport, communications', 'Financial services', 'Housing', 'Public administration', 'Other services'
+];
+
+// --- State ---
+let processedData = [];
+let rawData = [];
+let svg, triangleGroup;
+const width = 600, height = 600;
+const triangleSide = 500;
+const triangleHeight = triangleSide * Math.sqrt(3) / 2;
+const vertices = {
+  top: { x: 0, y: -triangleHeight / 2 }, // Primary
+  left: { x: -triangleSide / 2, y: triangleHeight / 2 }, // Secondary
+  right: { x: triangleSide / 2, y: triangleHeight / 2 } // Tertiary
+};
+
+// --- Main ---
+document.addEventListener('DOMContentLoaded', () => {
+  svg = d3.select('#triangle-diagram');
+  triangleGroup = svg.append('g').attr('transform', `translate(${width/2},${height/2})`);
+  fetch('timeseries.txt')
+    .then(r => r.text())
+    .then(txt => parseTSV(txt))
+    .then(data => {
+      rawData = data;
+      updateDiagram();
+    })
+    .catch(e => showStatus('Failed to load data: ' + e));
+
+  document.getElementById('fixed-years').addEventListener('input', updateDiagram);
+  document.getElementById('threshold').addEventListener('input', updateDiagram);
+});
+
+function parseTSV(txt) {
+  // Parse tab-separated values
+  const rows = txt.trim().split(/\r?\n/);
+  const headers = rows[0].split('\t');
+  return rows.slice(1).map(line => {
+    const cols = line.split('\t');
+    const obj = {};
+    headers.forEach((h, i) => obj[h.trim()] = (cols[i] || '').trim());
+    return obj;
+  });
+}
+
+function updateDiagram() {
+  // Get controls
+  const fixedYears = document.getElementById('fixed-years').value.split(',').map(y => parseInt(y.trim())).filter(y => !isNaN(y));
+  const threshold = parseFloat(document.getElementById('threshold').value) || 0;
+  // Process data
+  processedData = processData(rawData, fixedYears, threshold);
+  // Redraw
+  triangleGroup.selectAll('*').remove();
+  drawTriangle();
+  drawTriangularGrid();
+  drawAxisLabels();
+  plotData(processedData);
+  showStatus(`Loaded ${processedData.length} points (${fixedYears.length} fixed years, threshold ${threshold}%)`);
+  document.getElementById('info-box').style.display = 'none';
+}
+
+function processData(data, fixedYears, threshold) {
+  let result = [];
+  let lastDisplayed = null;
+  for (const row of data) {
+    const year = parseInt(row.Year);
+    if (isNaN(year)) continue;
+    const primary = sumCols(row, PRIMARY);
+    const secondary = sumCols(row, SECONDARY);
+    const tertiary = sumCols(row, TERTIARY);
+    const total = primary + secondary + tertiary;
+    if (total === 0) continue;
+    const p = 100 * primary / total;
+    const s = 100 * secondary / total;
+    const t = 100 * tertiary / total;
+    const dataPoint = {
+      year,
+      percentages: { p, s, t },
+      raw: { primary, secondary, tertiary },
+      rawFull: row
+    };
+    let shouldInclude = false;
+    if (fixedYears.includes(year)) shouldInclude = true;
+    else if (!lastDisplayed ||
+      Math.abs(p - lastDisplayed.percentages.p) > threshold ||
+      Math.abs(s - lastDisplayed.percentages.s) > threshold ||
+      Math.abs(t - lastDisplayed.percentages.t) > threshold) shouldInclude = true;
+    if (shouldInclude) {
+      result.push(dataPoint);
+      lastDisplayed = dataPoint;
+    }
+  }
+  return result;
+}
+
+function sumCols(row, cols) {
+  return cols.reduce((sum, col) => {
+    const rawValue = row[col];
+    if (rawValue === undefined || rawValue === null) return sum;
+    let value = 0;
+    if (typeof rawValue === 'number') value = rawValue;
+    else if (typeof rawValue === 'string') value = parseFloat(rawValue.replace(/,/g, '')) || 0;
+    return sum + value;
+  }, 0);
+}
+
+function drawTriangle() {
+  const trianglePoints = [
+    [vertices.top.x, vertices.top.y],
+    [vertices.left.x, vertices.left.y],
+    [vertices.right.x, vertices.right.y]
+  ];
+  const trianglePath = d3.line().x(d => d[0]).y(d => d[1]).curve(d3.curveLinearClosed);
+  triangleGroup.append('path')
+    .datum(trianglePoints)
+    .attr('d', trianglePath)
+    .attr('fill', 'none')
+    .attr('stroke', '#333')
+    .attr('stroke-width', 2);
+}
+
+function drawTriangularGrid() {
+  const ticks = 10;
+  for (let i = 1; i < ticks; i++) {
+    const f = i / ticks;
+    // Lines parallel to the bottom (constant Primary)
+    let p1 = interpolate(vertices.left, vertices.top, f);
+    let p2 = interpolate(vertices.right, vertices.top, f);
+    triangleGroup.append('line').attr('x1', p1.x).attr('y1', p1.y).attr('x2', p2.x).attr('y2', p2.y).attr('stroke', '#ddd');
+    // Lines parallel to the left (constant Tertiary)
+    p1 = interpolate(vertices.top, vertices.right, f);
+    p2 = interpolate(vertices.left, vertices.right, f);
+    triangleGroup.append('line').attr('x1', p1.x).attr('y1', p1.y).attr('x2', p2.x).attr('y2', p2.y).attr('stroke', '#ddd');
+    // Lines parallel to the right (constant Secondary)
+    p1 = interpolate(vertices.top, vertices.left, f);
+    p2 = interpolate(vertices.right, vertices.left, f);
+    triangleGroup.append('line').attr('x1', p1.x).attr('y1', p1.y).attr('x2', p2.x).attr('y2', p2.y).attr('stroke', '#ddd');
+  }
+}
+
+function interpolate(p1, p2, t) {
+  return {
+    x: p1.x * (1 - t) + p2.x * t,
+    y: p1.y * (1 - t) + p2.y * t
+  };
+}
+
+function drawAxisLabels() {
+  const tickCount = 10;
+  const tickOffset = 15;
+  const labelOffset = 40;
+  // Bottom Axis: Tertiary (0% left, 100% right)
+  for (let i = 1; i < tickCount; i++) {
+    const p = interpolate(vertices.left, vertices.right, i / tickCount);
+    triangleGroup.append('text').text(`${i * 10}%`)
+      .attr('x', p.x).attr('y', p.y + tickOffset)
+      .attr('text-anchor', 'middle').attr('font-size', '12px').attr('fill', '#333');
+  }
+  triangleGroup.append('text').text('Tertiary Sector')
+    .attr('x', 0).attr('y', vertices.left.y + labelOffset)
+    .attr('text-anchor', 'middle').attr('font-size', '16px').attr('font-weight', 'bold');
+  // Left Axis: Secondary (0% top, 100% bottom)
+  for (let i = 1; i < tickCount; i++) {
+    const p = interpolate(vertices.top, vertices.left, i / tickCount);
+    triangleGroup.append('text').text(`${i * 10}%`)
+      .attr('x', p.x).attr('y', p.y)
+      .attr('transform', `rotate(60, ${p.x}, ${p.y})`)
+      .attr('text-anchor', 'end').attr('dx', -tickOffset).attr('dy', 4)
+      .attr('font-size', '12px').attr('fill', '#333');
+  }
+  triangleGroup.append('text').text('Secondary Sector')
+    .attr('x', -triangleSide / 2 - 5).attr('y', 0)
+    .attr('transform', `rotate(60, -${triangleSide / 4}, 0)`)
+    .attr('text-anchor', 'middle').attr('font-size', '16px').attr('font-weight', 'bold');
+  // Right Axis: Primary (0% bottom, 100% top)
+  for (let i = 1; i < tickCount; i++) {
+    const p = interpolate(vertices.right, vertices.top, i / tickCount);
+    triangleGroup.append('text').text(`${i * 10}%`)
+      .attr('x', p.x).attr('y', p.y)
+      .attr('transform', `rotate(-60, ${p.x}, ${p.y})`)
+      .attr('text-anchor', 'start').attr('dx', tickOffset).attr('dy', 4)
+      .attr('font-size', '12px').attr('fill', '#333');
+  }
+  triangleGroup.append('text').text('Primary Sector')
+    .attr('x', triangleSide / 2 + 5).attr('y', 0)
+    .attr('transform', `rotate(-60, ${triangleSide / 4}, 0)`)
+    .attr('text-anchor', 'middle').attr('font-size', '16px').attr('font-weight', 'bold');
+}
+
+function percentagesToCoordinates(primary, secondary, tertiary) {
+  const total = primary + secondary + tertiary;
+  if (total === 0) return [0, 0];
+  const p = primary / total;
+  const s = secondary / total;
+  const t = tertiary / total;
+  const x = vertices.top.x * p + vertices.left.x * s + vertices.right.x * t;
+  const y = vertices.top.y * p + vertices.left.y * s + vertices.right.y * t;
+  return [x, y];
+}
+
+function plotData(data) {
+  // Clear previous plot
+  triangleGroup.selectAll('.data-point, .data-path, .data-label').remove();
+  const coords = data.map(d => ({
+    ...d,
+    coord: percentagesToCoordinates(d.percentages.p, d.percentages.s, d.percentages.t)
+  }));
+  // Draw path
+  triangleGroup.append('path')
+    .datum(coords)
+    .attr('class', 'data-path')
+    .attr('fill', 'none')
+    .attr('stroke', '#e74c3c')
+    .attr('stroke-width', 2)
+    .attr('d', d3.line()
+      .x(d => d.coord[0])
+      .y(d => d.coord[1])
+    );
+  // Draw points and year labels
+  const points = triangleGroup.selectAll('.data-point')
+    .data(coords)
+    .enter();
+  points.append('circle')
+    .attr('class', 'data-point')
+    .attr('cx', d => d.coord[0])
+    .attr('cy', d => d.coord[1])
+    .attr('r', 6)
+    .attr('fill', '#e74c3c')
+    .attr('stroke', '#fff')
+    .attr('stroke-width', 2)
+    .on('click', (event, d) => {
+      d3.selectAll('.data-point').attr('r', 6).attr('fill', '#e74c3c');
+      d3.select(event.currentTarget).attr('r', 8).attr('fill', '#c0392b');
+      showInfoBox(d);
+    });
+  points.append('text')
+    .attr('class', 'data-label')
+    .attr('x', d => d.coord[0] + 8)
+    .attr('y', d => d.coord[1] - 8)
+    .attr('font-size', '14px')
+    .attr('font-weight', 'bold')
+    .attr('fill', '#222')
+    .text(d => d.year);
+}
+
+function showInfoBox(data) {
+  const infoBox = document.getElementById('info-box');
+  infoBox.style.display = 'block';
+  document.getElementById('info-year').textContent = data.year;
+  document.getElementById('info-primary-perc').textContent = data.percentages.p.toFixed(1);
+  document.getElementById('info-primary-raw').textContent = data.raw.primary.toLocaleString();
+  document.getElementById('info-secondary-perc').textContent = data.percentages.s.toFixed(1);
+  document.getElementById('info-secondary-raw').textContent = data.raw.secondary.toLocaleString();
+  document.getElementById('info-tertiary-perc').textContent = data.percentages.t.toFixed(1);
+  document.getElementById('info-tertiary-raw').textContent = data.raw.tertiary.toLocaleString();
+  // Populate raw data details
+  const detailsContainer = document.getElementById('info-raw-details');
+  detailsContainer.innerHTML = '';
+  const sectorColors = {
+    primary: '#27ae60',
+    secondary: '#f39c12',
+    tertiary: '#2980b9'
+  };
+  for (const colName in data.rawFull) {
+    if (["Year", "Total", "columns"].includes(colName) || data.rawFull[colName] === '<-') continue;
+    const rawValue = data.rawFull[colName] || '0';
+    let value = 0;
+    if (typeof rawValue === 'number') value = rawValue;
+    else if (typeof rawValue === 'string') value = parseFloat(rawValue.replace(/,/g, '')) || 0;
+    const p = document.createElement('p');
+    p.style.margin = '2px 0';
+    let sectorColor = '#666';
+    if (PRIMARY.includes(colName)) sectorColor = sectorColors.primary;
+    else if (SECONDARY.includes(colName)) sectorColor = sectorColors.secondary;
+    else if (TERTIARY.includes(colName)) sectorColor = sectorColors.tertiary;
+    p.innerHTML = `<span style="color: ${sectorColor};">${colName}:</span> ${value.toLocaleString()}`;
+    detailsContainer.appendChild(p);
+  }
+}
+
+function showStatus(message) {
+  const el = document.getElementById('status-message');
+  el.textContent = message;
+  el.style.display = 'block';
+  setTimeout(() => { el.style.display = 'none'; }, 4000);
+}
+</script>
+</body>
+</html> 
